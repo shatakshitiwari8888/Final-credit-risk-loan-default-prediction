@@ -124,3 +124,31 @@ def test_logistic_decomposition_reconstructs_probability():
     reconstructed = 1 / (1 + np.exp(-log_odds))
     predicted = model.predict_proba(sample)[0, 1]
     assert abs(reconstructed - predicted) < 1e-9
+
+
+def test_borrower_what_if_and_stress_scenarios_are_model_based():
+    from credit_risk.client_engine import borrower_sensitivity, stress_test_sample
+    portfolio = sample_portfolio(1500)
+    model = fit_borrower_model(portfolio)
+    scenario = borrower_sensitivity(model, 75000, 18, 700, 15000,
+                                    income_gain=10000, dti_reduction=5, fico_gain=20)
+    assert 0 <= scenario["baseline_pd"] <= 1
+    assert 0 <= scenario["simulated_pd"] <= 1
+    assert scenario["simulated_fico"] == 720
+    base = stress_test_sample(portfolio, model, 0, 0, lgd=.45, max_rows=500)
+    stressed = stress_test_sample(portfolio, model, 20, 10, lgd=.45, max_rows=500)
+    assert base["loans"] == 500
+    assert abs(base["baseline_el"] - base["stressed_el"]) < 1e-6
+    assert stressed["stressed_el"] >= 0
+    assert stressed["loans"] == 500
+
+
+def test_holdout_diagnostics_are_bounded_and_reproducible():
+    from credit_risk.client_engine import evaluate_borrower_model
+    portfolio = sample_portfolio(1800)
+    results = evaluate_borrower_model(portfolio, max_rows=1000)
+    assert results["train_rows"] + results["test_rows"] == 1000
+    assert 0 <= results["auc"] <= 1
+    assert 0 <= results["brier"] <= 1
+    assert results["tn"] + results["fp"] + results["fn"] + results["tp"] == results["test_rows"]
+    assert not results["calibration"].empty
