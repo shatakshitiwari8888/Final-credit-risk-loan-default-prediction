@@ -142,7 +142,11 @@ with st.sidebar:
     st.divider()
     st.caption("PORTFOLIO COVERAGE")
     st.markdown(f"**{period_label}**")
-    st.caption(f"{len(portfolio):,} accepted loan records")
+    if portfolio.attrs.get("sampled"):
+        st.caption(f"{len(portfolio):,} sampled records from {portfolio.attrs.get('source_rows', 0):,} source loans")
+        st.warning("Large dataset: charts and totals reflect a reproducible 4% sample, not the full population.", icon="ℹ️")
+    else:
+        st.caption(f"{len(portfolio):,} accepted loan records")
     st.markdown('<div class="fine-print">Historical outcomes use loans with a resolved terminal status.</div>', unsafe_allow_html=True)
 
 
@@ -154,7 +158,7 @@ if selected_page == "Portfolio Summary":
     cols = st.columns(5)
     values = [
         ("Loans analysed", f"{total_loans:,}", f"Accepted loans · {period_label}"),
-        ("Funded exposure", compact_money(total_funded), "Total funded principal"),
+        ("Sample funded exposure" if portfolio.attrs.get("sampled") else "Funded exposure", compact_money(total_funded), "Sum of analysed records"),
         ("Observed charge-off rate", rate(default_rate), f"Resolved loans · {len(resolved):,}"),
         ("Average loan size", money(average_loan), "Original loan principal"),
         ("Median FICO", f"{median_fico:,.0f}" if pd.notna(median_fico) else "—", "At origination"),
@@ -279,7 +283,7 @@ elif selected_page == "Risk & Segments":
     with m1:
         st.metric("Loans in selection", f"{len(filtered):,}")
     with m2:
-        st.metric("Funded exposure", compact_money(float(filtered[funded_column].fillna(0).sum())))
+        st.metric("Sample funded exposure" if portfolio.attrs.get("sampled") else "Funded exposure", compact_money(float(filtered[funded_column].fillna(0).sum())))
     with m3:
         st.metric("Observed charge-off rate", rate(filtered_rate))
     with m4:
