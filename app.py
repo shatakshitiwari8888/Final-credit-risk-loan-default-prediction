@@ -1,6 +1,8 @@
 """Client-facing Streamlit dashboard for loan portfolio analytics."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -9,13 +11,14 @@ import streamlit as st
 from credit_risk.client_engine import (
     fit_borrower_model, format_period_range, load_portfolio,
     peer_benchmark, prepare_borrower_features, risk_band,
+    historical_grade_assessment, logistic_contributions,
 )
 
 NAVIGATION = ["Portfolio Summary", "Risk & Segments", "Borrower Assessment"]
 NAVY, NAVY_2, TEAL, GOLD, RED = "#14263D", "#1F3854", "#168C88", "#C59A52", "#B94A48"
 INK, MUTED, GRID, BG = "#111111", "#111111", "#E7ECF1", "#F4F6F8"
 
-st.set_page_config(page_title="Loan Portfolio Intelligence", page_icon="▦", layout="wide")
+st.set_page_config(page_title="Loan Portfolio Intelligence", page_icon=str(Path(__file__).parent / "assets" / "rupee.svg"), layout="wide")
 st.markdown(
     f"""
     <style>
@@ -406,73 +409,215 @@ elif selected_page == "Risk & Segments":
 
 
 elif selected_page == "Borrower Assessment":
-    header("Borrower Assessment", "Review an applicant against historical portfolio experience.", "Individual borrower review")
+    header(
+        "Retail Loan Applicant Risk Scorer",
+        "Historical borrower risk, grade comparison and transparent model explanation.",
+        "Borrower risk assessment & underwriting",
+    )
     st.markdown(
-        '<div class="fine-print">Enter the applicant’s stated financial profile. Results are indicative and should be considered alongside verified documents, bureau records and the lender’s credit policy.</div>',
+        '<div class="fine-print">The grade below is an indicative alignment with LendingClub historical origination grades, '
+        'not an official bureau or lender-assigned grade, approval, decline, or interest-rate offer.</div>',
         unsafe_allow_html=True,
     )
-    st.write("")
+
+    profiles = {
+        "Stronger profile": (110_000.0, 9.0, 780, 12_000.0),
+        "Typical profile": (75_000.0, 18.0, 700, 15_000.0),
+        "Higher-risk profile": (35_000.0, 38.0, 600, 30_000.0),
+    }
+
+    def apply_profile(profile_name: str):
+        income, debt, score, principal = profiles[profile_name]
+        st.session_state["assess_income"] = income
+        st.session_state["assess_dti"] = debt
+        st.session_state["assess_fico"] = score
+        st.session_state["assess_principal"] = principal
+        st.session_state.pop("client_assessment", None)
+
+    for key, default in [
+        ("assess_income", 75_000.0), ("assess_dti", 18.0),
+        ("assess_fico", 700), ("assess_principal", 15_000.0),
+    ]:
+        st.session_state.setdefault(key, default)
+
+    st.markdown("#### Example borrower profiles")
+    pcols = st.columns(3)
+    for column, profile_name in zip(pcols, profiles):
+        with column:
+            st.button(profile_name, on_click=apply_profile,
+                      args=(profile_name,), use_container_width=True)
+
     with st.form("borrower_assessment", border=True):
+        st.markdown("#### Applicant financial variables")
         c1, c2 = st.columns(2, gap="large")
         with c1:
-            annual_income = st.number_input("Gross annual income (USD)", min_value=1_000.0, max_value=5_000_000.0, value=75_000.0, step=2_500.0, format="%.0f")
-            dti = st.number_input("Debt-to-income ratio (%)", min_value=0.0, max_value=100.0, value=18.0, step=0.5, format="%.1f")
+            annual_income = st.number_input(
+                "Gross annual income (USD)", min_value=1_000.0,
+                max_value=5_000_000.0, step=2_500.0, format="%.0f",
+                key="assess_income",
+            )
+            dti = st.slider(
+                "Debt-to-income ratio (%)", min_value=0.0, max_value=100.0,
+                step=0.5, key="assess_dti",
+            )
         with c2:
-            fico = st.slider("FICO score", min_value=300, max_value=850, value=700, step=5)
-            loan_amount = st.number_input("Requested loan amount (USD)", min_value=500.0, max_value=500_000.0, value=15_000.0, step=500.0, format="%.0f")
-        submit = st.form_submit_button("Run borrower assessment", type="primary", width="stretch")
+            fico = st.slider(
+                "FICO credit score", min_value=300, max_value=850, step=5,
+                key="assess_fico",
+            )
+            loan_amount = st.number_input(
+                "Requested loan amount (USD)", min_value=500.0,
+                max_value=500_000.0, step=500.0, format="%.0f",
+                key="assess_principal",
+            )
+        live_lti = loan_amount / max(annual_income, 1.0)
+        st.caption(f"Engineered feature · Loan-to-income ratio: {live_lti:.3f}x")
+        submit = st.form_submit_button(
+            "Run borrower assessment", type="primary", use_container_width=True
+        )
 
     if submit:
         try:
             estimator = get_estimator()
-            features = prepare_borrower_features(annual_income, dti, fico, loan_amount)
+            features = prepare_borrower_features(
+                annual_income, dti, fico, loan_amount
+            )
             probability = float(estimator.predict_proba(features)[0, 1])
-            peers = peer_benchmark(portfolio, annual_income, dti, fico, loan_amount)
+            peers = peer_benchmark(
+                portfolio, annual_income, dti, fico, loan_amount
+            )
+            grade_info = historical_grade_assessment(portfolio, probability)
+            explanation = logistic_contributions(estimator, features)
             st.session_state["client_assessment"] = {
-                "probability": probability, "band": risk_band(probability), "peers": peers,
+                "probability": probability,
+                "band": risk_band(probability),
+                "peers": peers,
+                "grade": grade_info["grade"],
+                "reference": grade_info["reference"],
+                "explanation": explanation,
                 "income": annual_income, "dti": dti, "fico": fico,
-                "loan_amount": loan_amount, "lti": loan_amount / annual_income,
+                "loan_amount": loan_amount, "lti": live_lti,
             }
         except Exception as exc:
+            st.session_state.pop("client_assessment", None)
             st.error(f"Unable to complete the assessment: {exc}")
 
     result = st.session_state.get("client_assessment")
     if result:
         st.write("")
-        st.markdown("### Assessment result")
-        a, b, c, d = st.columns(4)
+        st.markdown("### Borrower risk assessment")
+        a, b, c = st.columns(3)
         with a:
-            st.metric("Estimated probability of default", rate(result["probability"]))
+            st.metric("Indicative historical grade", result["grade"])
         with b:
-            st.markdown(
-                f'<div class="metric-card"><div class="metric-title">Indicative risk band</div>'
-                f'<div class="metric-value">{result["band"]}</div>'
-                f'<div class="metric-foot">Based on the entered profile</div></div>',
-                unsafe_allow_html=True,
-            )
+            st.metric("Estimated probability of default", rate(result["probability"]))
         with c:
-            st.metric("Comparable historical loans", f'{result["peers"]["count"]:,}')
-        with d:
-            peer_rate = result["peers"]["default_rate"]
-            st.metric("Comparable group charge-off rate", rate(peer_rate) if peer_rate is not None else "Not available")
+            st.metric("Risk category", result["band"])
 
+        p1, p2 = st.columns(2)
+        with p1:
+            st.metric("Comparable historical loans", f'{result["peers"]["count"]:,}')
+        with p2:
+            peer_rate = result["peers"]["default_rate"]
+            st.metric(
+                "Comparable group charge-off rate",
+                rate(peer_rate) if peer_rate is not None else "Not available",
+            )
         st.progress(float(np.clip(result["probability"], 0, 1)))
-        st.markdown("#### Applicant profile")
+        st.caption(
+            "Grade A–G is aligned to the sample's observed historical charge-off "
+            "rates by LendingClub origination grade. It is not an assigned lender "
+            "grade or a credit decision."
+        )
+
+        st.markdown("#### Applicant financial profile")
         details = pd.DataFrame(
             [
                 ("Annual income", money(result["income"])),
                 ("Debt-to-income", f'{result["dti"]:.1f}%'),
                 ("FICO score", f'{result["fico"]:,.0f}'),
                 ("Requested principal", money(result["loan_amount"])),
-                ("Loan-to-income", f'{result["lti"]:.2f}x'),
+                ("Loan-to-income", f'{result["lti"]:.3f}x'),
             ],
             columns=["Assessment input", "Applicant value"],
         )
-        st.dataframe(details, hide_index=True, width="stretch")
+        st.dataframe(details, hide_index=True, use_container_width=True)
+
+        st.markdown("#### Sigmoid risk curve")
+        st.caption(
+            "The red point represents the model's calculated log-odds and "
+            "probability of default for this applicant."
+        )
+        z = np.linspace(-5.0, 5.0, 201)
+        curve = pd.DataFrame({
+            "Log-odds (z)": z,
+            "Probability of default": 1 / (1 + np.exp(-z)),
+        })
+        fig = px.line(
+            curve, x="Log-odds (z)", y="Probability of default",
+            color_discrete_sequence=[NAVY],
+        )
+        fig.add_scatter(
+            x=[result["explanation"]["log_odds"]],
+            y=[result["probability"]],
+            mode="markers+text",
+            text=[f'{result["probability"]:.1%} PD'],
+            textposition="top center",
+            marker=dict(color=RED, size=12),
+            name="Applicant",
+        )
+        fig.update_yaxes(tickformat=".0%", range=[0, 1])
+        chart_layout(fig, 330)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Model explanation: standardized inputs to log-odds")
+        st.caption(
+            "These contributions are calculated from this app's fitted logistic "
+            "regression coefficients, not from example or illustrative weights. "
+            "Negative contributions reduce estimated log-odds of default."
+        )
+        decomposition = result["explanation"]["rows"].copy()
+        decomposition["Input"] = decomposition["Input"].map(lambda v: f"{v:,.3f}")
+        for column in ["Z-score", "Coefficient", "Log-odds contribution"]:
+            decomposition[column] = decomposition[column].map(lambda v: f"{v:+.3f}")
+        st.dataframe(decomposition, hide_index=True, use_container_width=True)
+        intercept = result["explanation"]["intercept"]
+        log_odds = result["explanation"]["log_odds"]
+        st.caption(
+            f"Intercept: {intercept:+.3f} · Total log-odds: {log_odds:+.3f} · "
+            f"Predicted default probability: {result['probability']:.2%}"
+        )
+
+        reference = result["reference"]
+        if not reference.empty:
+            with st.expander("How is the indicative grade derived?"):
+                st.write(
+                    "The model estimates default probability from income, DTI, "
+                    "FICO, loan amount and loan-to-income. That probability is "
+                    "compared against historical charge-off rates for actual "
+                    "LendingClub grades A–G. The closest ordered risk interval "
+                    "determines the indicative historical grade; a lender may "
+                    "assign a different grade."
+                )
+                summary = reference.reset_index().rename(columns={
+                    "grade": "Historical grade",
+                    "loans": "Resolved loans",
+                    "observed_rate": "Historical charge-off rate",
+                })
+                st.dataframe(
+                    summary, hide_index=True, use_container_width=True,
+                    column_config={
+                        "Historical charge-off rate": st.column_config.NumberColumn(
+                            format="%.1%%"
+                        )
+                    },
+                )
+
         st.markdown(
-            '<div class="result-band"><strong>Assessment context</strong><br>'
-            'The estimated probability is a historical-data-based indicator. It is not an automated approval or decline, '
-            'a quoted interest rate, or a substitute for a complete underwriting review.</div>',
+            '<div class="result-band"><strong>Assessment context</strong>'
+            '<p>This is an indicative historical-data-based analysis. It is not '
+            'a credit approval, decline, offered APR or financial advice. '
+            'Review against verified borrower documents and lender policy.</p></div>',
             unsafe_allow_html=True,
         )
 
