@@ -350,3 +350,133 @@ def logistic_contributions(estimator: Any, features: pd.DataFrame) -> dict[str, 
         "Log-odds contribution": contributions,
     })
     return {"rows": rows, "intercept": intercept, "log_odds": log_odds}
+
+
+def borrower_sensitivity(estimator: Any, income: float, dti: float,
+                         fico: float, loan_amount: float,
+                         income_gain: float = 0.0, dti_reduction: float = 0.0,
+                         fico_gain: float = 0.0) -> dict[str, float]:
+    """Model-driven borrower what-if; does not promise a credit decision."""
+    baseline = prepare_borrower_features(income, dti, fico, loan_amount)
+    changed = prepare_borrower_features(
+        income + max(0.0, income_gain),
+        max(0.0, dti - max(0.0, dti_reduction)),
+        min(850.0, fico + max(0.0, fico_gain)),
+        loan_amount,
+    )
+    return {
+        "baseline_pd": float(estimator.predict_proba(baseline)[0, 1]),
+        "simulated_pd": float(estimator.predict_proba(changed)[0, 1]),
+        "simulated_income": float(changed.iloc[0]["annual_inc"]),
+        "simulated_dti": float(changed.iloc[0]["dti"]),
+        "simulated_fico": float(changed.iloc[0]["fico_range_low"]),
+    }
+
+
+def stress_test_sample(portfolio: pd.DataFrame, estimator: Any,
+                       income_decline_pct: float = 0.0,
+                       dti_increase_points: float = 0.0,
+                       lgd: float = 0.45,
+                       max_rows: int = 5000) -> dict[str, float]:
+    """Illustrative EAD×PD×LGD shock on a bounded sample of historical loans.
+
+    The same rows under baseline and stress are scored by the fitted model.
+    This is NOT a forecast, a regulatory stress test, or full-book loss.
+    """
+    if not (0.0 <= lgd <= 1.0):
+        raise ValueError("LGD must be between 0 and 1")
+    eligible = portfolio.loc[
+        portfolio["annual_inc"].gt(0) & portfolio["loan_amnt"].gt(0)
+        & portfolio["fico_range_low"].notna(),
+        ["annual_inc", "dti", "fico_range_low", "loan_amnt", "lti"],
+    ]
+    if eligible.empty:
+        raise ValueError("No valid borrower profiles for scenario evaluation")
+    if len(eligible) > max_rows:
+        eligible = eligible.sample(n=max_rows, random_state=52)
+    x = eligible.astype("float64").copy()
+    base_pd = estimator.predict_proba(x)[:, 1]
+    scenario = x.copy()
+    scenario["annual_inc"] = (scenario["annual_inc"]
+                              * (1.0 - max(0.0, min(95.0, income_decline_pct)) / 100.0))
+    scenario["dti"] = (scenario["dti"] + max(0.0, dti_increase_points)).clip(upper=100)
+    scenario["lti"] = (scenario["loan_amnt"]
+                        / scenario["annual_inc"].clip(lower=1000)).clip(upper=5)
+    stressed_pd = estimator.predict_proba(scenario)[:, 1]
+    ead = x["loan_amnt"].to_numpy()
+    base_el = float(np.dot(ead, base_pd) * lgd)
+    stressed_el = float(np.dot(ead, stressed_pd) * lgd)
+    return {
+        "loans": int(len(x)),
+        "exposure": float(ead.sum()),
+        "baseline_pd": float(base_pd.mean()),
+        "stressed_pd": float(stressed_pd.mean()),
+        "baseline_el": base_el,
+        "stressed_el": stressed_el,
+        "incremental_el": stressed_el - base_el,
+    }
+
+
+def evaluate_borrower_model(portfolio: pd.DataFrame,
+                            max_rows: int = 15000) -> dict[str, Any]:
+    """Train/holdout metrics from a reproducible, stratified 80/20 partition.
+
+    Separate from the production estimator: all displayed accuracy statistics
+    are evaluated on loans that were not used for training this diagnostic model.
+    """
+    from sklearn.base import clone
+    from sklearn.metrics import (accuracy_score, brier_score_loss,
+        confusion_matrix, f1_score, precision_score, recall_score,
+        roc_auc_score, roc_curve)
+    from sklearn.model_selection import train_test_split
+
+    cols = FEATURES + ["target"]
+    eligible = portfolio.loc[portfolio["target"].notna(), cols]
+    eligible = eligible.loc[
+        eligible["annual_inc"].gt(0) & eligible["loan_amnt"].gt(0)
+        & eligible["fico_range_low"].ge(300)
+    ]
+    if len(eligible) > max_rows:
+        eligible = eligible.sample(n=max_rows, random_state=71)
+    if len(eligible) < 500 or eligible["target"].nunique() < 2:
+        raise ValueError("Not enough labeled resolved loans for holdout validation")
+    x = eligible[FEATURES].astype("float64").replace([np.inf, -np.inf], np.nan)
+    y = eligible["target"].astype("int8")
+    x_train, x_test, y_train, y_test = train_test_split(
+        x, y, test_size=0.2, random_state=42, stratify=y,
+    )
+    # Use the exact same model family and preprocessing as the live app.
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    model = Pipeline([
+        ("impute", SimpleImputer(strategy="median")),
+        ("scale", StandardScaler()),
+        ("logistic", LogisticRegression(max_iter=500, solver="lbfgs", C=0.8)),
+    ])
+    model.fit(x_train, y_train)
+    probabilities = model.predict_proba(x_test)[:, 1]
+    threshold = 0.30
+    predicted = (probabilities >= threshold).astype("int8")
+    tn, fp, fn, tp = confusion_matrix(y_test, predicted, labels=[0, 1]).ravel()
+    fpr, tpr, thresholds = roc_curve(y_test, probabilities)
+    calibration = pd.DataFrame({"pred": probabilities, "actual": y_test.to_numpy()})
+    calibration["bin"] = pd.qcut(calibration["pred"], q=8, duplicates="drop")
+    calibration = calibration.groupby("bin", observed=True).agg(
+        predicted_pd=("pred", "mean"),
+        observed_default=("actual", "mean"),
+        loans=("actual", "size"),
+    ).reset_index(drop=True)
+    return {
+        "train_rows": int(len(y_train)), "test_rows": int(len(y_test)),
+        "auc": float(roc_auc_score(y_test, probabilities)),
+        "accuracy": float(accuracy_score(y_test, predicted)),
+        "precision": float(precision_score(y_test, predicted, zero_division=0)),
+        "recall": float(recall_score(y_test, predicted, zero_division=0)),
+        "f1": float(f1_score(y_test, predicted, zero_division=0)),
+        "brier": float(brier_score_loss(y_test, probabilities)),
+        "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
+        "fpr": fpr, "tpr": tpr, "calibration": calibration,
+        "threshold": threshold,
+    }
