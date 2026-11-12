@@ -301,3 +301,52 @@ def format_period_range(portfolio: pd.DataFrame) -> str:
     if years.empty:
         return "Period unavailable"
     return f"{int(years.min())}–{int(years.max())}"
+
+
+def historical_grade_assessment(portfolio: pd.DataFrame, probability: float) -> dict[str, Any]:
+    """Align modeled default risk with observed LendingClub origination grades.
+
+    This is a descriptive, indicative grade, NOT a lender-issued credit grade
+    or a lending/approval decision. Only sufficiently represented resolved
+    historical loans are considered.
+    """
+    grades = list("ABCDEFG")
+    valid = portfolio.loc[
+        portfolio["target"].notna() & portfolio["grade"].isin(grades), ["grade", "target"]
+    ]
+    if valid.empty:
+        return {"grade": "Unrated", "reference": pd.DataFrame()}
+    reference = (
+        valid.groupby("grade", observed=True)["target"]
+        .agg(loans="size", observed_rate="mean")
+        .reindex(grades)
+        .dropna()
+    )
+    reference = reference.loc[reference["loans"] >= 30].copy()
+    if len(reference) < 2:
+        return {"grade": "Unrated", "reference": reference}
+    # Maintain a non-decreasing grade-risk ordering despite sample noise.
+    ordered_rates = np.maximum.accumulate(reference["observed_rate"].to_numpy(dtype=float))
+    cutoffs = (ordered_rates[:-1] + ordered_rates[1:]) / 2.0
+    grade = str(reference.index[int(np.searchsorted(cutoffs, probability, side="right"))])
+    return {"grade": grade, "reference": reference}
+
+
+def logistic_contributions(estimator: Any, features: pd.DataFrame) -> dict[str, Any]:
+    """Exact per-feature standardized log-odds decomposition of fitted model."""
+    imputed = estimator.named_steps["impute"].transform(features[FEATURES])
+    standardized = estimator.named_steps["scale"].transform(imputed)[0]
+    model = estimator.named_steps["logistic"]
+    coefficients = model.coef_[0]
+    contributions = standardized * coefficients
+    intercept = float(model.intercept_[0])
+    log_odds = intercept + float(contributions.sum())
+    rows = pd.DataFrame({
+        "Feature": ["Annual income", "Debt-to-income", "FICO score",
+                    "Loan amount", "Loan-to-income"],
+        "Input": imputed[0],
+        "Z-score": standardized,
+        "Coefficient": coefficients,
+        "Log-odds contribution": contributions,
+    })
+    return {"rows": rows, "intercept": intercept, "log_odds": log_odds}
