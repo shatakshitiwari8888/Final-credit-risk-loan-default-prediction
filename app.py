@@ -12,9 +12,10 @@ from credit_risk.client_engine import (
     fit_borrower_model, format_period_range, load_portfolio,
     peer_benchmark, prepare_borrower_features, risk_band,
     historical_grade_assessment, logistic_contributions,
+    borrower_sensitivity, stress_test_sample, evaluate_borrower_model,
 )
 
-NAVIGATION = ["Portfolio Summary", "Risk & Segments", "Borrower Assessment"]
+NAVIGATION = ["Portfolio Summary", "Risk & Segments", "Borrower Assessment", "Model Diagnostics"]
 NAVY, NAVY_2, TEAL, GOLD, RED = "#14263D", "#1F3854", "#168C88", "#C59A52", "#B94A48"
 INK, MUTED, GRID, BG = "#111111", "#111111", "#E7ECF1", "#F4F6F8"
 
@@ -164,7 +165,7 @@ period_label = format_period_range(portfolio)
 
 with st.sidebar:
     st.markdown(
-        '<div class="brand-mark">Credit portfolio services</div>'
+        '<div class="brand-mark">₹ · Credit portfolio services</div>'
         '<div class="brand-name">Loan Portfolio<br>Intelligence</div>'
         '<div class="brand-sub">Portfolio monitoring · Credit risk · Borrower review</div>',
         unsafe_allow_html=True,
@@ -405,6 +406,77 @@ elif selected_page == "Risk & Segments":
         chart_layout(fig, 330)
         st.plotly_chart(fig, width="stretch")
 
+
+    st.markdown("### FICO × debt-to-income risk heatmap")
+    st.caption("Observed charge-off rates among resolved historical loans in the selected sample. Blank cells have fewer than 15 resolved loans.")
+    matrix = filtered_resolved[["fico_range_low", "dti", "target"]].copy()
+    matrix["FICO tier"] = pd.cut(
+        matrix["fico_range_low"], [0, 650, 700, 750, 900],
+        labels=["Below 650", "650–699", "700–749", "750+"], right=False,
+    )
+    matrix["DTI tier"] = pd.cut(
+        matrix["dti"], [-0.001, 15, 20, 25, np.inf],
+        labels=["Below 15%", "15–20%", "20–25%", "25%+"], right=False,
+    )
+    cohorts = (
+        matrix.groupby(["FICO tier", "DTI tier"], observed=True)["target"]
+        .agg(default_rate="mean", loans="size").reset_index()
+    )
+    cohorts.loc[cohorts["loans"] < 15, "default_rate"] = np.nan
+    display = cohorts.pivot(index="FICO tier", columns="DTI tier", values="default_rate")
+    fig = px.imshow(
+        display.astype(float), text_auto=".0%", color_continuous_scale="RdYlGn_r",
+        zmin=0, zmax=0.50, aspect="auto", labels={"color": "Default rate"},
+    )
+    fig.update_layout(margin=dict(l=5, r=5, t=10, b=5), height=320)
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Macroeconomic scenario simulator (illustrative)", expanded=False):
+        st.caption(
+            "Model-based sensitivity on at most 5,000 sampled loans, not a "
+            "regulatory stress test or full-portfolio forecast. Loss given default "
+            "(LGD) is an assumption; no recovery data is modeled."
+        )
+        x1, x2, x3 = st.columns(3)
+        with x1:
+            shock_income = st.slider("Borrower income reduction (%)", 0, 40, 10, 5)
+        with x2:
+            shock_dti = st.slider("DTI increase (percentage points)", 0, 25, 5, 1)
+        with x3:
+            assumed_lgd = st.slider("Assumed loss given default (%)", 20, 90, 45, 5)
+        if st.button("Calculate scenario impact", key="run_portfolio_stress"):
+            try:
+                with st.spinner("Scoring sample under both scenarios…"):
+                    stress = stress_test_sample(
+                        portfolio, get_estimator(), shock_income, shock_dti,
+                        assumed_lgd / 100,
+                    )
+                st.session_state["portfolio_stress"] = {
+                    "inputs": (shock_income, shock_dti, assumed_lgd),
+                    "result": stress,
+                }
+            except Exception as exc:
+                st.error(f"Scenario unavailable: {exc}")
+        scenario = st.session_state.get("portfolio_stress")
+        if scenario:
+            if scenario["inputs"] != (shock_income, shock_dti, assumed_lgd):
+                st.info("Scenario inputs changed. Click Calculate to update the displayed results.")
+            stress = scenario["result"]
+            st.caption(f"Scenario basis: {stress['loans']:,} sampled loans · {compact_money(stress['exposure'])} sample principal.")
+            q1, q2, q3 = st.columns(3)
+            with q1:
+                st.metric("Baseline modeled PD", rate(stress["baseline_pd"]))
+            with q2:
+                st.metric("Scenario modeled PD", rate(stress["stressed_pd"]),
+                          delta=f"{(stress['stressed_pd']-stress['baseline_pd'])*100:+.2f} pp",
+                          delta_color="inverse")
+            with q3:
+                st.metric("Incremental sample expected loss", money(stress["incremental_el"]))
+            st.caption(
+                f"Baseline sample expected loss: {money(stress['baseline_el'])} · "
+                f"Scenario expected loss: {money(stress['stressed_el'])}. "
+                "Calculated from modeled PD × sampled principal × assumed LGD."
+            )
     st.caption("Segment rates are historical observations, not forecasts. Unresolved loans are excluded from charge-off-rate calculations.")
 
 
@@ -543,6 +615,52 @@ elif selected_page == "Borrower Assessment":
         )
         st.dataframe(details, hide_index=True, use_container_width=True)
 
+        st.markdown("#### What-if borrower improvement simulator")
+        st.caption("Model sensitivity only: changing inputs does not guarantee a lower rate, credit approval, or a grade assigned by a lender.")
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            extra_income = st.slider("Income increase ($)", 0, 30000, 5000, 1000, key="whatif_income")
+        with w2:
+            dti_drop = st.slider("DTI reduction (points)", 0.0, 15.0, 3.0, 0.5, key="whatif_dti")
+        with w3:
+            fico_boost = st.slider("FICO improvement (points)", 0, 80, 20, 5, key="whatif_fico")
+        try:
+            sensitivity = borrower_sensitivity(
+                get_estimator(), result["income"], result["dti"],
+                result["fico"], result["loan_amount"],
+                extra_income, dti_drop, fico_boost,
+            )
+            simulated_grade = historical_grade_assessment(
+                portfolio, sensitivity["simulated_pd"]
+            )["grade"]
+            w4, w5, w6 = st.columns(3)
+            with w4:
+                st.metric("Current modeled PD", rate(sensitivity["baseline_pd"]))
+            with w5:
+                st.metric("What-if modeled PD", rate(sensitivity["simulated_pd"]),
+                          delta=f"{(sensitivity['simulated_pd']-sensitivity['baseline_pd'])*100:+.2f} pp",
+                          delta_color="inverse")
+            with w6:
+                st.metric("Indicative grade shift", f'{result["grade"]} → {simulated_grade}')
+        except Exception as exc:
+            st.error(f"What-if assessment unavailable: {exc}")
+
+        memo = (
+            "LOAN PORTFOLIO INTELLIGENCE — BORROWER RISK SUMMARY\\n"
+            "Indicative research analysis; NOT a credit approval, loan offer or APR.\\n"
+            f"Income: {money(result['income'])} | DTI: {result['dti']:.1f}% | "
+            f"FICO: {result['fico']:.0f} | Requested principal: {money(result['loan_amount'])}\\n"
+            f"Estimated default probability: {result['probability']:.2%}\\n"
+            f"Indicative historical grade: {result['grade']}\\n"
+            f"Historical comparable loans: {result['peers']['count']:,}\\n"
+            "Method: Logistic regression on resolved LendingClub loan data, with historical-grade comparison.\\n"
+        )
+        st.download_button(
+            "Download assessment memo (.txt)", data=memo.encode("utf-8"),
+            file_name="borrower_risk_assessment.txt", mime="text/plain",
+            key="download_underwriting_memo",
+        )
+
         st.markdown("#### Sigmoid risk curve")
         st.caption(
             "The red point represents the model's calculated log-odds and "
@@ -620,6 +738,82 @@ elif selected_page == "Borrower Assessment":
             'Review against verified borrower documents and lender policy.</p></div>',
             unsafe_allow_html=True,
         )
+
+
+elif selected_page == "Model Diagnostics":
+    header(
+        "Model Performance & Validation",
+        "Out-of-sample evaluation of the same logistic-regression model family.",
+        "Responsible model validation",
+    )
+    st.caption(
+        "Metrics are calculated on an untouched 20% holdout of up to 15,000 "
+        "resolved historical loans. This diagnostic model is separately "
+        "trained; numbers are not copied from the reference website."
+    )
+
+    @st.cache_resource(show_spinner="Running holdout model validation…")
+    def get_holdout_metrics():
+        return evaluate_borrower_model(get_portfolio())
+
+    if st.button("Run holdout model validation", type="primary"):
+        try:
+            st.session_state["show_diagnostics"] = True
+            get_holdout_metrics()
+        except Exception as exc:
+            st.session_state["show_diagnostics"] = False
+            st.error(f"Model validation unavailable: {exc}")
+    if st.session_state.get("show_diagnostics"):
+        diagnostics = get_holdout_metrics()
+        st.caption(f"Training records: {diagnostics['train_rows']:,} · Independent holdout: {diagnostics['test_rows']:,} · Classification threshold: {diagnostics['threshold']:.0%}.")
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            st.metric("ROC AUC", f'{diagnostics["auc"]:.3f}')
+            st.metric("Holdout accuracy", rate(diagnostics["accuracy"]))
+        with k2:
+            st.metric("Default recall", rate(diagnostics["recall"]))
+            st.metric("Default precision", rate(diagnostics["precision"]))
+        with k3:
+            st.metric("F1 score", f'{diagnostics["f1"]:.3f}')
+            st.metric("Brier score (lower better)", f'{diagnostics["brier"]:.3f}')
+        left, right = st.columns(2)
+        with left:
+            st.markdown("#### Holdout ROC curve")
+            roc = pd.DataFrame({
+                "False positive rate": diagnostics["fpr"],
+                "True positive rate": diagnostics["tpr"],
+            })
+            fig = px.line(roc, x="False positive rate", y="True positive rate",
+                          color_discrete_sequence=[TEAL])
+            fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                          line=dict(color="#AAAAAA", dash="dash"))
+            chart_layout(fig, 320)
+            st.plotly_chart(fig, use_container_width=True)
+        with right:
+            st.markdown("#### Holdout confusion matrix")
+            confusion = pd.DataFrame([
+                {"Actual": "Repaid", "Predicted repaid": diagnostics["tn"],
+                 "Predicted default": diagnostics["fp"]},
+                {"Actual": "Defaulted", "Predicted repaid": diagnostics["fn"],
+                 "Predicted default": diagnostics["tp"]},
+            ])
+            st.dataframe(confusion, hide_index=True, use_container_width=True)
+            st.caption("False negatives are defaulted loans classified below the chosen PD threshold. Changing the threshold changes these counts.")
+        st.markdown("#### Probability calibration")
+        fig = px.scatter(
+            diagnostics["calibration"], x="predicted_pd", y="observed_default",
+            size="loans", labels={"predicted_pd": "Mean predicted PD",
+                                  "observed_default": "Observed default rate"},
+            color_discrete_sequence=[TEAL],
+        )
+        fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                      line=dict(color="#999999", dash="dash"))
+        fig.update_xaxes(tickformat=".0%")
+        fig.update_yaxes(tickformat=".0%")
+        chart_layout(fig, 360)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Performance is based on historical resolved loans. No lender approval or profitability claims are implied.")
+
 
 
 st.divider()
