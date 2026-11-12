@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import logging
+import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -29,7 +32,24 @@ DISPLAY_FIELDS = [
 ]
 
 FEATURES = ["annual_inc", "dti", "fico_range_low", "loan_amnt", "lti"]
-MAX_TRAINING_ROWS = 250_000
+MAX_TRAINING_ROWS = 50_000
+LARGE_ARCHIVE_BYTES = 100 * 1024 * 1024
+SAMPLE_FRACTION = 0.04
+READ_CHUNK_ROWS = 40_000
+logger = logging.getLogger(__name__)
+
+
+def log_memory(stage: str) -> None:
+    """Report process RSS and high-water mark to Streamlit deployment logs."""
+    try:
+        with open("/proc/self/status", encoding="ascii") as fh:
+            values = dict(line.split(":", 1) for line in fh if ":" in line)
+        logger.warning("portfolio_memory stage=%s pid=%s rss=%s peak=%s",
+                       stage, os.getpid(), values.get("VmRSS", "").strip(),
+                       values.get("VmHWM", "").strip())
+    except (OSError, ValueError):
+        logger.info("portfolio_memory stage=%s (RSS unavailable)", stage)
+
 
 
 def _numeric(series: pd.Series) -> pd.Series:
@@ -60,6 +80,9 @@ def load_portfolio(path: str | Path = DATA_PATH) -> pd.DataFrame:
             "Add data/accepted_2007_to_2018Q4.csv.gz using Git LFS."
         )
 
+    started = time.monotonic()
+    log_memory("load_start")
+    use_sample = path.stat().st_size >= LARGE_ARCHIVE_BYTES
     header = pd.read_csv(path, compression="gzip", nrows=0).columns.tolist()
     available = [column for column in DISPLAY_FIELDS if column in header]
     required = {"loan_status", "loan_amnt", "annual_inc", "dti", "fico_range_low"}
@@ -70,16 +93,29 @@ def load_portfolio(path: str | Path = DATA_PATH) -> pd.DataFrame:
         )
 
     chunks: list[pd.DataFrame] = []
-    for chunk in pd.read_csv(
+    rows_scanned = 0
+    for index, chunk in enumerate(pd.read_csv(
         path,
         compression="gzip",
         usecols=available,
-        chunksize=200_000,
+        chunksize=READ_CHUNK_ROWS,
         low_memory=False,
         dtype_backend="pyarrow",
-    ):
+    )):
+        rows_scanned += len(chunk)
+        if use_sample:
+            # Retain a deterministic 4% sample rather than all 2.26M records.
+            # Per-chunk sampling bounds resident data during CSV parsing.
+            chunk = chunk.sample(n=max(1, round(len(chunk) * SAMPLE_FRACTION)),
+                                 random_state=42 + index)
         chunks.append(chunk)
+        if index % 10 == 0:
+            log_memory(f"read_chunk_{index}")
     frame = pd.concat(chunks, ignore_index=True, copy=False) if chunks else pd.DataFrame(columns=available)
+    del chunks
+    logger.warning("portfolio_load source_rows=%s retained_rows=%s sampled=%s elapsed_s=%.1f",
+                   rows_scanned, len(frame), use_sample, time.monotonic() - started)
+    log_memory("after_concat")
 
     # Keep only loan-level variables suitable for portfolio reporting.
     defaults = {
@@ -151,6 +187,9 @@ def load_portfolio(path: str | Path = DATA_PATH) -> pd.DataFrame:
     # The raw loan_status string is not required in the client interface.
     frame.drop(columns=["loan_status", "term", "issue_d"], inplace=True, errors="ignore")
     frame["term_months"] = frame["term_months"].astype("int16")
+    frame.attrs["sampled"] = use_sample
+    frame.attrs["source_rows"] = rows_scanned
+    log_memory("load_complete")
     return frame
 
 
@@ -178,10 +217,15 @@ def fit_borrower_model(portfolio: pd.DataFrame):
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
 
+    log_memory("training_start")
     eligible = portfolio.loc[
         portfolio["target"].notna(),
         ["annual_inc", "dti", "fico_range_low", "loan_amnt", "lti", "target"],
-    ].copy()
+    ]
+    # Sample before the copies required by sklearn conversion and imputation.
+    if len(eligible) > MAX_TRAINING_ROWS:
+        eligible = eligible.sample(n=MAX_TRAINING_ROWS, random_state=42)
+    eligible = eligible.copy()
     eligible = eligible.replace([np.inf, -np.inf], np.nan)
     eligible = eligible.dropna(subset=["annual_inc", "fico_range_low", "loan_amnt", "target"])
     eligible = eligible[
@@ -191,9 +235,6 @@ def fit_borrower_model(portfolio: pd.DataFrame):
     ]
     if eligible["target"].nunique() < 2 or len(eligible) < 500:
         raise ValueError("There are not enough resolved historical loans to produce an assessment.")
-
-    if len(eligible) > MAX_TRAINING_ROWS:
-        eligible = eligible.sample(n=MAX_TRAINING_ROWS, random_state=42)
 
     x = eligible[FEATURES].astype("float64")
     y = eligible["target"].astype("int8")
@@ -205,6 +246,7 @@ def fit_borrower_model(portfolio: pd.DataFrame):
         ]
     )
     estimator.fit(x, y)
+    log_memory("training_complete")
     return estimator
 
 
