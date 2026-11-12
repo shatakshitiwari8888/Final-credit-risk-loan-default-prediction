@@ -76,31 +76,16 @@ st.markdown(
       [data-testid="stMain"] [data-testid="stMetric"] {{
         color: #111111 !important;
       }}
-      /* Allow selected filter chips to wrap inside the three multiselects. */
-      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {{
-        height: auto !important;
-        min-height: 42px !important;
-        max-height: none !important;
-        flex-wrap: wrap !important;
-        align-items: flex-start !important;
-        overflow: visible !important;
-      }}
-      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div > div {{
-        flex-wrap: wrap !important;
-        height: auto !important;
-        max-height: none !important;
-        overflow: visible !important;
-        white-space: normal !important;
-      }}
-      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
-        max-width: 100%;
+      /* Selection pills wrap naturally; keep strong text contrast. */
+      [data-testid="stMain"] [data-testid="stPills"] button {{
         white-space: normal !important;
         height: auto !important;
-        min-height: 26px;
+        min-height: 33px;
+        overflow-wrap: anywhere;
+        font-weight: 600;
       }}
-      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {{
-        white-space: normal !important;
-        overflow-wrap: anywhere !important;
+      [data-testid="stMain"] [data-testid="stPills"] button[aria-pressed="false"] {{
+        color: #111111 !important;
       }}
       hr {{ border-color: {GRID}; }}
       footer {{ visibility: hidden; }}
@@ -333,22 +318,32 @@ elif selected_page == "Risk & Segments":
     header("Risk & Segments", "Compare credit quality and observed repayment outcomes across portfolio segments.", "Portfolio analysis")
     min_year = int(portfolio["issue_year"].dropna().min())
     max_year = int(portfolio["issue_year"].dropna().max())
-    f1, f2, f3, f4 = st.columns([1.2, 1.1, 1.5, 1.4])
-    with f1:
-        years = st.slider("Origination years", min_year, max_year, (min_year, max_year))
-    with f2:
-        grades = sorted(portfolio["grade"].astype("string").dropna().unique().tolist())
-        selected_grades = st.multiselect("Credit grade", grades, default=grades)
-    with f3:
-        purposes = sorted(portfolio["purpose"].astype("string").dropna().unique().tolist())
-        selected_purposes = st.multiselect(
-            "Loan purpose", purposes,
-            default=[x for x in purposes if x in {"debt_consolidation", "credit_card", "home_improvement", "major_purchase"}] or purposes[:4],
-            format_func=purpose_label,
-        )
-    with f4:
-        states = sorted(portfolio["addr_state"].astype("string").dropna().unique().tolist())
-        selected_states = st.multiselect("Borrower state", states, default=states)
+    # Visible, wrapping multi-choice pills avoid Streamlit's narrow, horizontally
+    # clipped multiselect tags. All selections are visible without sideways scrolling.
+    years = st.slider("Origination years", min_year, max_year, (min_year, max_year))
+    st.markdown("#### Filter portfolio by credit quality, purpose and state")
+    grades = sorted(portfolio["grade"].astype("string").dropna().unique().tolist())
+    selected_grades = st.pills(
+        "Credit grade", grades, selection="multi", default=grades,
+        key="risk_grade_pills",
+    )
+    purposes = sorted(portfolio["purpose"].astype("string").dropna().unique().tolist())
+    default_purposes = [
+        x for x in purposes if x in {
+            "debt_consolidation", "credit_card", "home_improvement", "major_purchase"
+        }
+    ] or purposes[:4]
+    selected_purposes = st.pills(
+        "Loan purpose", purposes, selection="multi",
+        default=default_purposes, format_func=purpose_label,
+        key="risk_purpose_pills",
+    )
+    states = sorted(portfolio["addr_state"].astype("string").dropna().unique().tolist())
+    selected_states = st.pills(
+        "Borrower state", states, selection="multi", default=states,
+        key="risk_state_pills",
+    )
+    st.caption("Highlighted pills are selected. Click any pill to include or exclude it. All selected values remain visible.")
 
     filtered = portfolio.loc[
         portfolio["issue_year"].between(years[0], years[1])
