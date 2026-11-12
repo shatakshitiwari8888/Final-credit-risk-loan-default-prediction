@@ -3,7 +3,7 @@ name: Python Validation
 on:
   push:
     branches:
-      - client-presentation
+      - main
   pull_request:
     branches:
       - main
