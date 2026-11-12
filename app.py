@@ -76,17 +76,40 @@ st.markdown(
       [data-testid="stMain"] [data-testid="stMetric"] {{
         color: #111111 !important;
       }}
-      /* Selection pills wrap naturally; keep strong text contrast. */
-      [data-testid="stMain"] [data-testid="stPills"] button {{
-        white-space: normal !important;
-        height: auto !important;
-        min-height: 33px;
-        overflow-wrap: anywhere;
-        font-weight: 600;
+      /* Full-width selected-value summaries: wrap every tag, never scroll sideways. */
+      .selected-filter-summary {{
+        margin: .3rem 0 .55rem;
+        padding: .6rem .8rem;
+        background: #FFFFFF;
+        border: 1px solid #D5DDE5;
+        border-radius: 9px;
       }}
-      [data-testid="stMain"] [data-testid="stPills"] button[aria-pressed="false"] {{
+      .selected-filter-label {{
         color: #111111 !important;
+        font-size: .82rem;
+        font-weight: 750;
+        margin-bottom: .4rem;
       }}
+      .selected-filter-chips {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: .32rem;
+        overflow: visible;
+        white-space: normal;
+      }}
+      .filter-chip {{
+        display: inline-flex;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        border-radius: 6px;
+        padding: .22rem .55rem;
+        color: #FFFFFF !important;
+        background: #B7354A;
+        font-size: .77rem;
+        font-weight: 650;
+      }}
+      .filter-none {{ color: #111111 !important; }}
       hr {{ border-color: {GRID}; }}
       footer {{ visibility: hidden; }}
     </style>
@@ -318,33 +341,50 @@ elif selected_page == "Risk & Segments":
     header("Risk & Segments", "Compare credit quality and observed repayment outcomes across portfolio segments.", "Portfolio analysis")
     min_year = int(portfolio["issue_year"].dropna().min())
     max_year = int(portfolio["issue_year"].dropna().max())
-    # Visible, wrapping multi-choice pills avoid Streamlit's narrow, horizontally
-    # clipped multiselect tags. All selections are visible without sideways scrolling.
-    years = st.slider("Origination years", min_year, max_year, (min_year, max_year))
-    st.markdown("#### Filter portfolio by credit quality, purpose and state")
-    grades = sorted(portfolio["grade"].astype("string").dropna().unique().tolist())
-    selected_grades = st.pills(
-        "Credit grade", grades, selection="multi", default=grades,
-        key="risk_grade_pills",
-    )
-    purposes = sorted(portfolio["purpose"].astype("string").dropna().unique().tolist())
-    default_purposes = [
-        x for x in purposes if x in {
-            "debt_consolidation", "credit_card", "home_improvement", "major_purchase"
-        }
-    ] or purposes[:4]
-    selected_purposes = st.pills(
-        "Loan purpose", purposes, selection="multi",
-        default=default_purposes, format_func=purpose_label,
-        key="risk_purpose_pills",
-    )
-    states = sorted(portfolio["addr_state"].astype("string").dropna().unique().tolist())
-    selected_states = st.pills(
-        "Borrower state", states, selection="multi", default=states,
-        key="risk_state_pills",
-    )
-    st.caption("Highlighted pills are selected. Click any pill to include or exclude it. All selected values remain visible.")
+    # Keep stable, supported Streamlit controls for filtering, and show every
+    # selected value in full-width wrapping summaries below the filter row.
+    f1, f2, f3, f4 = st.columns([1.2, 1.1, 1.5, 1.4])
+    with f1:
+        years = st.slider("Origination years", min_year, max_year, (min_year, max_year))
+    with f2:
+        grades = sorted(portfolio["grade"].astype("string").dropna().unique().tolist())
+        selected_grades = st.multiselect("Credit grade", grades, default=grades)
+    with f3:
+        purposes = sorted(portfolio["purpose"].astype("string").dropna().unique().tolist())
+        selected_purposes = st.multiselect(
+            "Loan purpose", purposes,
+            default=[x for x in purposes if x in {
+                "debt_consolidation", "credit_card", "home_improvement", "major_purchase"
+            }] or purposes[:4],
+            format_func=purpose_label,
+        )
+    with f4:
+        states = sorted(portfolio["addr_state"].astype("string").dropna().unique().tolist())
+        selected_states = st.multiselect("Borrower state", states, default=states)
 
+    # The native multiselect widget clips tags horizontally. This always-visible
+    # display presents *every* selection without horizontal scrolling.
+    from html import escape as escape_html
+
+    def selection_chips(label, values, formatter=str):
+        chips = "".join(
+            '<span class="filter-chip">' + escape_html(formatter(value)) + '</span>'
+            for value in values
+        )
+        if not chips:
+            chips = '<span class="filter-none">None selected</span>'
+        st.markdown(
+            '<div class="selected-filter-summary">'
+            '<div class="selected-filter-label">' + escape_html(label)
+            + f' ({len(values)} selected)</div>'
+            '<div class="selected-filter-chips">' + chips + '</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("#### Selected filter options")
+    selection_chips("Credit grades", selected_grades)
+    selection_chips("Loan purposes", selected_purposes, purpose_label)
+    selection_chips("Borrower states", selected_states)
     filtered = portfolio.loc[
         portfolio["issue_year"].between(years[0], years[1])
         & portfolio["grade"].astype("string").isin(selected_grades)
