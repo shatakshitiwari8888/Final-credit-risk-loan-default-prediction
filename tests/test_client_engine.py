@@ -62,3 +62,38 @@ def test_borrower_model_and_peer_benchmark():
 
 def test_period_range():
     assert format_period_range(sample_portfolio()) == "2010–2018"
+
+
+def test_large_archive_sampling_is_bounded(tmp_path, monkeypatch):
+    from credit_risk import client_engine
+    frame = pd.DataFrame({
+        "loan_status": ["Fully Paid", "Charged Off"] * 2500,
+        "loan_amnt": [15000] * 5000,
+        "annual_inc": [75000] * 5000,
+        "dti": [17] * 5000,
+        "fico_range_low": [700] * 5000,
+    })
+    path = tmp_path / "loans.csv.gz"
+    frame.to_csv(path, compression="gzip", index=False)
+    monkeypatch.setattr(client_engine, "LARGE_ARCHIVE_BYTES", 1)
+    result = client_engine.load_portfolio(path)
+    assert len(result) == 200
+    assert result.attrs["source_rows"] == 5000
+    assert result.attrs["sampled"] is True
+    assert set(result["outcome"].astype(str)) == {"Fully paid", "Charged off"}
+
+
+def test_small_archive_keeps_all_rows(tmp_path):
+    from credit_risk.client_engine import load_portfolio
+    frame = pd.DataFrame({
+        "loan_status": ["Fully Paid", "Charged Off"],
+        "loan_amnt": [10000, 20000],
+        "annual_inc": [50000, 60000],
+        "dti": [15, 20],
+        "fico_range_low": [710, 680],
+    })
+    path = tmp_path / "small.csv.gz"
+    frame.to_csv(path, compression="gzip", index=False)
+    result = load_portfolio(path)
+    assert len(result) == 2
+    assert result.attrs["sampled"] is False
