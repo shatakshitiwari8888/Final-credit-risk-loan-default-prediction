@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
+.DS_Store
+
+# Runtime outputs and model caches
+models/
+outputs/
+
+# Keep the source dataset in Git LFS; ignore other local data files.
+data/*
+!data/.gitkeep
+!data/accepted_2007_to_2018Q4.csv.gz

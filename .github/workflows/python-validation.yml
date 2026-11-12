@@ -1,0 +1,32 @@
+name: Python Validation
+
+on:
+  push:
+    branches:
+      - client-presentation
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python source
+        run: python -m py_compile app.py credit_risk/client_engine.py credit_risk/__init__.py
+
+      - name: Install runtime requirements
+        run: pip install -r requirements.txt
+
+      - name: Run focused client-engine tests
+        run: |
+          pip install pytest
+          PYTHONPATH=. pytest -q tests/test_client_engine.py
