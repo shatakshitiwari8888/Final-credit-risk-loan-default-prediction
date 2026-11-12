@@ -76,6 +76,32 @@ st.markdown(
       [data-testid="stMain"] [data-testid="stMetric"] {{
         color: #111111 !important;
       }}
+      /* Allow selected filter chips to wrap inside the three multiselects. */
+      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div {{
+        height: auto !important;
+        min-height: 42px !important;
+        max-height: none !important;
+        flex-wrap: wrap !important;
+        align-items: flex-start !important;
+        overflow: visible !important;
+      }}
+      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="select"] > div > div {{
+        flex-wrap: wrap !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        white-space: normal !important;
+      }}
+      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
+        max-width: 100%;
+        white-space: normal !important;
+        height: auto !important;
+        min-height: 26px;
+      }}
+      [data-testid="stMain"] [data-testid="stMultiSelect"] [data-baseweb="tag"] span {{
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+      }}
       hr {{ border-color: {GRID}; }}
       footer {{ visibility: hidden; }}
     </style>
@@ -117,14 +143,34 @@ def rate(value: float) -> str:
 
 
 def chart_layout(fig, height=340):
+    """Enforce black Plotly text regardless of browser light/dark theme."""
     fig.update_layout(
-        height=height, margin=dict(l=8, r=8, t=22, b=8),
+        template="plotly_white",
+        height=height, margin=dict(l=8, r=12, t=25, b=16),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Inter, Arial, sans-serif", color=INK, size=12),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        xaxis=dict(showgrid=False, zeroline=False, linecolor=GRID),
-        yaxis=dict(showgrid=True, gridcolor=GRID, zeroline=False, linecolor=GRID),
+        font=dict(family="Inter, Arial, sans-serif", color="#111111", size=13),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            font=dict(color="#111111", size=13),
+        ),
+        xaxis=dict(
+            showgrid=False, zeroline=False, linecolor=GRID,
+            tickfont=dict(color="#111111", size=12),
+            title_font=dict(color="#111111", size=13),
+            automargin=True,
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor=GRID, zeroline=False, linecolor=GRID,
+            tickfont=dict(color="#111111", size=12),
+            title_font=dict(color="#111111", size=13),
+            automargin=True,
+        ),
+        coloraxis_colorbar=dict(
+            tickfont=dict(color="#111111"),
+            title_font=dict(color="#111111"),
+        ),
     )
+    fig.update_traces(selector=dict(type="pie"), textfont=dict(color="#FFFFFF", size=13))
     return fig
 
 
@@ -217,7 +263,7 @@ if selected_page == "Portfolio Summary":
         )
         fig.update_traces(textposition="inside", textinfo="percent", marker=dict(line=dict(color="white", width=2)))
         chart_layout(fig, 345)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     with right:
         st.markdown("### Charge-off rate by origination year")
@@ -236,7 +282,7 @@ if selected_page == "Portfolio Summary":
         fig.update_traces(line=dict(color=TEAL, width=3), marker=dict(size=7, color=GOLD))
         fig.update_yaxes(tickformat=".0%")
         chart_layout(fig, 345)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     st.write("")
     left, right = st.columns(2, gap="large")
@@ -257,7 +303,7 @@ if selected_page == "Portfolio Summary":
         )
         fig.update_traces(marker_line_width=0)
         chart_layout(fig, 310)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
     with right:
         st.markdown("### Lending purpose")
         purpose_summary = (
@@ -275,7 +321,7 @@ if selected_page == "Portfolio Summary":
         )
         fig.update_traces(marker_line_width=0)
         chart_layout(fig, 310)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     st.caption(
         "Observed charge-off rate is calculated from loans with a terminal outcome (Fully Paid or Charged Off). "
@@ -343,7 +389,7 @@ elif selected_page == "Risk & Segments":
         fig.update_yaxes(tickformat=".0%")
         fig.update_layout(coloraxis_showscale=False)
         chart_layout(fig, 350)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     with right:
         st.markdown("### Charge-off rate by debt-to-income")
@@ -365,7 +411,7 @@ elif selected_page == "Risk & Segments":
         fig.update_traces(text=dti_stats["Charge_off_rate"].map(lambda x: f"{x:.1%}"), textposition="outside")
         fig.update_yaxes(tickformat=".0%")
         chart_layout(fig, 350)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
     st.write("")
     left, right = st.columns(2, gap="large")
@@ -389,7 +435,7 @@ elif selected_page == "Risk & Segments":
         fig.update_traces(text=fico_stats["Charge_off_rate"].map(lambda x: f"{x:.1%}"), textposition="outside")
         fig.update_yaxes(tickformat=".0%")
         chart_layout(fig, 330)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
     with right:
         st.markdown("### Loan term mix")
         term_stats = (
@@ -404,7 +450,7 @@ elif selected_page == "Risk & Segments":
         )
         fig.update_traces(textinfo="percent+label")
         chart_layout(fig, 330)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", theme=None)
 
 
     st.markdown("### FICO × debt-to-income risk heatmap")
@@ -429,7 +475,7 @@ elif selected_page == "Risk & Segments":
         zmin=0, zmax=0.50, aspect="auto", labels={"color": "Default rate"},
     )
     fig.update_layout(margin=dict(l=5, r=5, t=10, b=5), height=320)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, theme=None)
 
     with st.expander("Macroeconomic scenario simulator (illustrative)", expanded=False):
         st.caption(
@@ -686,7 +732,7 @@ elif selected_page == "Borrower Assessment":
         )
         fig.update_yaxes(tickformat=".0%", range=[0, 1])
         chart_layout(fig, 330)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
 
         st.markdown("#### Model explanation: standardized inputs to log-odds")
         st.caption(
@@ -788,7 +834,7 @@ elif selected_page == "Model Diagnostics":
             fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
                           line=dict(color="#AAAAAA", dash="dash"))
             chart_layout(fig, 320)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
         with right:
             st.markdown("#### Holdout confusion matrix")
             confusion = pd.DataFrame([
@@ -811,7 +857,7 @@ elif selected_page == "Model Diagnostics":
         fig.update_xaxes(tickformat=".0%")
         fig.update_yaxes(tickformat=".0%")
         chart_layout(fig, 360)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
         st.caption("Performance is based on historical resolved loans. No lender approval or profitability claims are implied.")
 
 
