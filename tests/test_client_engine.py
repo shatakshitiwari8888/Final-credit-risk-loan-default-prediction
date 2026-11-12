@@ -97,3 +97,30 @@ def test_small_archive_keeps_all_rows(tmp_path):
     result = load_portfolio(path)
     assert len(result) == 2
     assert result.attrs["sampled"] is False
+
+
+def test_indicative_grade_uses_historical_origination_grade_rates():
+    from credit_risk.client_engine import historical_grade_assessment
+    rows = []
+    for grade, defaults in [("A", 2), ("B", 10), ("C", 20), ("D", 32),
+                            ("E", 48), ("F", 62), ("G", 78)]:
+        for i in range(100):
+            rows.append({"grade": grade, "target": float(i < defaults)})
+    portfolio = pd.DataFrame(rows)
+    grades = [historical_grade_assessment(portfolio, p)["grade"]
+              for p in (0.02, 0.10, 0.20, 0.32, 0.48, 0.62, 0.78)]
+    assert grades == list("ABCDEFG")
+    assert historical_grade_assessment(portfolio, 0.98)["grade"] == "G"
+
+
+def test_logistic_decomposition_reconstructs_probability():
+    from credit_risk.client_engine import logistic_contributions
+    dataset = sample_portfolio()
+    model = fit_borrower_model(dataset)
+    sample = prepare_borrower_features(75000, 18, 700, 15000)
+    info = logistic_contributions(model, sample)
+    log_odds = info["intercept"] + float(info["rows"]["Log-odds contribution"].sum())
+    assert abs(log_odds - info["log_odds"]) < 1e-9
+    reconstructed = 1 / (1 + np.exp(-log_odds))
+    predicted = model.predict_proba(sample)[0, 1]
+    assert abs(reconstructed - predicted) < 1e-9
