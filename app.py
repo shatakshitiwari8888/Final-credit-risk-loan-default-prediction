@@ -13,7 +13,7 @@ from credit_risk.client_engine import (
 
 NAVIGATION = ["Portfolio Summary", "Risk & Segments", "Borrower Assessment"]
 NAVY, NAVY_2, TEAL, GOLD, RED = "#14263D", "#1F3854", "#168C88", "#C59A52", "#B94A48"
-INK, MUTED, GRID, BG = "#233247", "#718096", "#E7ECF1", "#F4F6F8"
+INK, MUTED, GRID, BG = "#111111", "#111111", "#E7ECF1", "#F4F6F8"
 
 st.set_page_config(page_title="Loan Portfolio Intelligence", page_icon="▦", layout="wide")
 st.markdown(
@@ -35,7 +35,7 @@ st.markdown(
       .metric-card {{ background: white; border: 1px solid {GRID}; border-radius: 12px; padding: 15px 17px; min-height: 110px; box-shadow: 0 2px 8px rgba(15,35,55,.025); }}
       .metric-title {{ color: {MUTED}; font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }}
       .metric-value {{ color: {NAVY}; font-size: 1.55rem; font-weight: 780; margin-top: .38rem; line-height: 1.2; }}
-      .metric-foot {{ color: #98A3B0; font-size: .72rem; margin-top: .28rem; }}
+      .metric-foot {{ color: #111111; font-size: .72rem; margin-top: .28rem; }}
       .result-band {{ background: #E6F4F2; border: 1px solid #C6E4E0; border-radius: 12px; padding: 17px 19px; }}
       .fine-print {{ font-size: .75rem; color: {MUTED}; line-height: 1.45; }}
       div[data-testid="stMetric"] {{ background: white; border: 1px solid {GRID}; border-radius: 12px; padding: 12px 15px; }}
@@ -43,6 +43,35 @@ st.markdown(
       div[data-testid="stForm"] {{ background: white; border: 1px solid {GRID}; border-radius: 12px; padding: 18px 20px; }}
       .stFormSubmitButton > button[kind="primary"] {{ background: {NAVY}; border: 1px solid {NAVY}; border-radius: 8px; font-weight: 700; }}
       .stFormSubmitButton > button[kind="primary"]:hover {{ background: {TEAL}; border-color: {TEAL}; }}
+      /* High-contrast main-page typography; preserve sidebar and dark inputs. */
+      [data-testid="stMain"] p,
+      [data-testid="stMain"] label,
+      [data-testid="stMain"] [data-testid="stCaptionContainer"],
+      [data-testid="stMain"] [data-testid="stCaptionContainer"] *,
+      [data-testid="stMain"] [data-testid="stMarkdownContainer"],
+      [data-testid="stMain"] [data-testid="stMarkdownContainer"] p,
+      [data-testid="stMain"] [data-testid="stMetricLabel"],
+      [data-testid="stMain"] [data-testid="stMetricLabel"] *,
+      [data-testid="stMain"] [data-testid="stMetricValue"],
+      [data-testid="stMain"] [data-testid="stMetricValue"] *,
+      [data-testid="stMain"] .metric-title,
+      [data-testid="stMain"] .metric-value,
+      [data-testid="stMain"] .metric-foot,
+      [data-testid="stMain"] .page-subtitle,
+      [data-testid="stMain"] .fine-print {{
+        color: #111111 !important;
+      }}
+      /* Keep text readable on dark input controls and the coloured button. */
+      [data-testid="stMain"] [data-baseweb="input"] input,
+      [data-testid="stMain"] [data-baseweb="select"] input,
+      [data-testid="stMain"] .stFormSubmitButton button,
+      [data-testid="stMain"] .stFormSubmitButton button * {{
+        color: #FFFFFF !important;
+      }}
+      /* Explicit metric label and value overrides for current Streamlit. */
+      [data-testid="stMain"] [data-testid="stMetric"] {{
+        color: #111111 !important;
+      }}
       hr {{ border-color: {GRID}; }}
       footer {{ visibility: hidden; }}
     </style>
